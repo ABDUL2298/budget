@@ -12,11 +12,15 @@ export const useBudget = (month?: number, year?: number) => {
   const [categories, setCategories] = useState<Category[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [user, setUser] = useState<string | null>(null);
 
-  const fetchSalary = async () => {
+  const fetchSalary = async (userId: string | null) => {
+    if (!userId) return null;
+
     const { data, error } = await supabase
       .from('salary')
       .select('*')
+      .eq('user_id', userId)
       .eq('month', currentMonth)
       .eq('year', currentYear)
       .maybeSingle();
@@ -29,7 +33,9 @@ export const useBudget = (month?: number, year?: number) => {
     return data;
   };
 
-  const fetchExpenses = async () => {
+  const fetchExpenses = async (userId: string | null) => {
+    if (!userId) return [];
+
     const { start, end } = getMonthStartEnd(currentMonth, currentYear);
 
     const { data, error } = await supabase
@@ -38,6 +44,7 @@ export const useBudget = (month?: number, year?: number) => {
         *,
         category:categories(*)
       `)
+      .eq('user_id', userId)
       .gte('date', start)
       .lte('date', end)
       .order('date', { ascending: false });
@@ -72,9 +79,15 @@ export const useBudget = (month?: number, year?: number) => {
   };
 
   const saveSalary = async (amount: number, currency: string = 'INR') => {
+    if (!user) {
+      setError('User not authenticated');
+      return { data: null, error: { message: 'User not authenticated' } as any };
+    }
+
     const { data: existingSalary } = await supabase
       .from('salary')
       .select('id')
+      .eq('user_id', user)
       .eq('month', currentMonth)
       .eq('year', currentYear)
       .maybeSingle();
@@ -96,7 +109,7 @@ export const useBudget = (month?: number, year?: number) => {
     } else {
       const { data, error } = await supabase
         .from('salary')
-        .insert({ month: currentMonth, year: currentYear, amount, currency })
+        .insert({ user_id: user, month: currentMonth, year: currentYear, amount, currency })
         .select()
         .single();
 
@@ -117,9 +130,14 @@ export const useBudget = (month?: number, year?: number) => {
     payment_method?: string;
     is_recurring?: boolean;
   }) => {
+    if (!user) {
+      setError('User not authenticated');
+      return { data: null, error: { message: 'User not authenticated' } as any };
+    }
+
     const { data, error } = await supabase
       .from('expenses')
-      .insert(expense)
+      .insert({ ...expense, user_id: user })
       .select(`
         *,
         category:categories(*)
@@ -181,18 +199,30 @@ export const useBudget = (month?: number, year?: number) => {
   };
 
   useEffect(() => {
+    const initializeUser = async () => {
+      const { data: { user: authUser } } = await supabase.auth.getUser();
+      if (authUser) {
+        setUser(authUser.id);
+      }
+    };
+
+    initializeUser();
+  }, []);
+
+  useEffect(() => {
     const loadData = async () => {
+      if (!user) return;
       setLoading(true);
       await Promise.all([
-        fetchSalary(),
-        fetchExpenses(),
+        fetchSalary(user),
+        fetchExpenses(user),
         fetchCategories(),
       ]);
       setLoading(false);
     };
 
     loadData();
-  }, [currentMonth, currentYear]);
+  }, [currentMonth, currentYear, user]);
 
   const totalExpenses = expenses.reduce((sum, expense) => sum + expense.amount, 0);
   const remainingBudget = (salary?.amount || 0) - totalExpenses;
